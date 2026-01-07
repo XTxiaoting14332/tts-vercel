@@ -1,43 +1,42 @@
 export default async function handler(req, res) {
-    // 你的 Cloudflare Worker 完整地址
     const WORKER_URL = "https://tts.zobyic.top/v1/audio/speech";
 
-    // 1. 获取来自板子的参数 (支持 GET 和 POST)
-    let body = null;
-    if (req.method === 'POST') {
-        // Vercel 会自动解析 JSON body
-        body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-    }
-    
-    const urlObj = new URL(req.url, `https://${req.headers.host}`);
-    const query = urlObj.search;
+    let text = "";
+    let voice = "zh-CN-XiaoxiaoNeural";
 
-    console.log(`正在转发请求至 Worker: ${WORKER_URL}${query}`);
+    // 1. 兼容性解析：自动判断是 GET 还是 POST
+    if (req.method === 'POST') {
+        // 处理板子发来的 POST JSON
+        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        text = body.input || body.text;
+    } else {
+        // 处理浏览器直接访问的 GET ?text=...
+        const { searchParams } = new URL(req.url, `https://${req.headers.host}`);
+        text = searchParams.get("text") || searchParams.get("input");
+    }
+
+    // 如果没有获取到文字，返回提示
+    if (!text) {
+        return res.status(400).json({ error: "Missing text", tip: "请在URL后添加 ?text=你好" });
+    }
+
+    console.log(`正在转发请求: ${text}`);
 
     try {
-        // 使用 Node.js 内置的 fetch，不再依赖 node-fetch 库
-        const workerResponse = await fetch(`${WORKER_URL}${query}`, {
-            method: req.method,
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Vercel-Proxy-Server'
-            },
-            body: body
+        // 2. 构造发送给 Worker 的标准格式
+        const workerResponse = await fetch(WORKER_URL, {
+            method: 'POST', // 统一转换成 Worker 喜欢的 POST
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input: text, voice: voice })
         });
 
-        // 2. 将音频数据读取为 ArrayBuffer
         const arrayBuffer = await workerResponse.arrayBuffer();
         
-        // 3. 设置给板子的 Response Headers
-        res.setHeader('Content-Type', workerResponse.headers.get('content-type') || 'audio/mpeg');
+        res.setHeader('Content-Type', 'audio/mpeg');
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Connection', 'close'); 
-
-        // 4. 发送二进制数据
         res.status(200).send(Buffer.from(arrayBuffer));
 
     } catch (error) {
-        console.error("中转失败:", error);
         res.status(500).json({ error: "Proxy Error", message: error.message });
     }
 }
